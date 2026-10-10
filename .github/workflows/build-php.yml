@@ -1,0 +1,68 @@
+name: build-php
+
+on:
+  workflow_dispatch:
+    inputs:
+      versions:
+        description: PHP minor versions, comma separated
+        default: "8.1,8.2,8.3,8.4,8.5"
+  schedule:
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: write
+
+jobs:
+  matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      versions: ${{ steps.m.outputs.versions }}
+    steps:
+      - id: m
+        run: echo "versions=$(echo '${{ inputs.versions || '8.1,8.2,8.3,8.4,8.5' }}' | jq -Rc 'split(",")')" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: matrix
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ${{ fromJson(needs.matrix.outputs.versions) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install static-php-cli
+        run: |
+          curl -fsSL -o spc.tar.gz https://github.com/crazywhalecc/static-php-cli/releases/download/2.8.5/spc-macos-aarch64.tar.gz
+          tar xzf spc.tar.gz
+          chmod +x spc
+          ./spc --version
+
+      - name: Toolchain
+        run: ./spc doctor --auto-fix
+
+      - name: Download sources
+        run: ./spc download --with-php=${{ matrix.php }} --for-extensions="$(cat extensions.txt)" --prefer-pre-built --retry=3
+
+      - name: Build
+        run: ./spc build "$(cat extensions.txt)" --build-cli --build-fpm --build-shared=xdebug
+
+      - name: Package
+        run: |
+          V=$(./buildroot/bin/php -r 'echo PHP_VERSION;')
+          echo "version=$V" >> "$GITHUB_ENV"
+          mkdir dist
+          tar -C buildroot/bin -czf "dist/php-$V-cli-macos-aarch64.tar.gz" php
+          tar -C buildroot/bin -czf "dist/php-$V-fpm-macos-aarch64.tar.gz" php-fpm
+          XD=$(find buildroot -name 'xdebug.so' | head -1)
+          if [ -n "$XD" ]; then cp "$XD" xdebug.so && tar -czf "dist/xdebug-$V-macos-aarch64.tar.gz" xdebug.so; fi
+          ./buildroot/bin/php -m > "dist/php-$V-modules.txt"
+          ./buildroot/bin/php -v
+          ls -la dist
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "php-$version" >/dev/null 2>&1 || gh release create "php-$version" --title "PHP $version" --notes "Static PHP $version for macOS arm64 built with static-php-cli. Extensions: $(cat extensions.txt). xdebug ships as a shared extension."
+          gh release upload "php-$version" dist/* --clobber
