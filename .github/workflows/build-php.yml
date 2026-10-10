@@ -42,7 +42,7 @@ jobs:
         run: ./spc doctor --auto-fix
 
       - name: Download sources
-        run: ./spc download --with-php=${{ matrix.php }} --for-extensions="$(cat extensions.txt)" --prefer-pre-built --retry=3
+        run: ./spc download --with-php=${{ matrix.php }} --for-extensions="$(cat extensions.txt),xdebug" --prefer-pre-built --retry=3
 
       - name: Build
         run: ./spc build "$(cat extensions.txt)" --build-cli --build-fpm --build-shared=xdebug
